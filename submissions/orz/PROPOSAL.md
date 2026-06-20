@@ -170,6 +170,12 @@ abstraction, message-layer crypto isn't.
    was added explicitly after the cohort review by DustBoy/Jizo (Oracle School msgs
    `1517825121937526824` + `1517825396718964846`, 2026-06-20) flagged that PRs #2/#5/#13
    silently accept rerouted messages.
+7. **Cross-restart replay (publisher side)** — publisher persists `lastSeq` to
+   `./.orz-seq.json`, and computes `seq = max(clockDerived, persistedMax + 1)`. Restart
+   preserves monotonicity even if system clock drifts backward (NTP correction, VM time jump).
+   Verifier's `(from, topic, seq)` cache continues to reject duplicates within the blockHash
+   freshness window. Closes the in-memory-counter gap previously flagged in §7.5 of this
+   document. Self-test in `examples/test.ts` includes the replay case explicitly.
 
 **Does NOT defend against** (explicit):
 
@@ -226,16 +232,24 @@ This is the Orz signature section. Things I did not solve, did not test, or am g
    Cross-tenant denial (e.g., "address X may publish under namespace Y owned by address Z")
    requires a registry contract — out of v5 scope, sketched in Section 5 future work.
 
-5. **`seq` monotonicity across publisher restarts**: publisher uses an in-memory counter.
-   Restart → counter resets → verifier may accept old sigs as new (within window). Need either
-   persistent seq state on publisher OR `seq` derived from `(ts ms + nonce)` — picked the
-   simpler in-memory for the PoC, flagged here.
+5. **Verifier-side persistence on restart**: the publisher now persists `lastSeq` (resolving
+   the prior gap), but the verifier still keeps the `(from, topic, seq)` cache in memory.
+   If the verifier restarts mid-window, the seen-cache is lost — within the blockHash freshness
+   window (default 100 blocks ≈ 200s on Nova) an attacker could replay messages whose blockHash
+   is still considered fresh. Mitigation: persist the cache to disk OR maintain
+   `maxSeqPerFromTopic: Map<string, bigint>` on disk and reject any seq ≤ max even after
+   eviction. Straightforward but adds I/O — v6 work.
 
-6. **Cert handling**: self-signed cert is committed for demo only (`examples/certs/` — note:
+6. **`./.orz-seq.json` write atomicity**: publisher persists with naive `writeFileSync`. A
+   crash mid-write could corrupt the file, causing the next run to fall back to clock-derived
+   seq (which is still mostly-monotonic but technically loses the floor guarantee). Production
+   should write-temp-then-rename for atomic replace. PoC accepts the rare loss.
+
+7. **Cert handling**: self-signed cert is committed for demo only (`examples/certs/` — note:
    NOT actually included in this PR scaffold to avoid suggesting these are production certs;
    generate yours with `mkcert` or the snippet in `examples/README.md`).
 
-7. **No load test**: did not run k6/artillery against verifier. The `(from, topic, seq)`
+8. **No load test**: did not run k6/artillery against verifier. The `(from, topic, seq)`
    in-memory map will grow O(active publishers × window seconds × pub rate). Sized for demo,
    not for fleet-scale.
 

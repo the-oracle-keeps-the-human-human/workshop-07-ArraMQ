@@ -7,7 +7,10 @@
   "scripts": {
     "publisher": "bun publisher.ts",
     "verifier": "bun verifier.ts",
-    "worker:mock": "bun cf-worker-mock.ts"
+    "worker:mock": "bun cf-worker-mock.ts",
+    "test": "bun run test.ts",
+    "publish:once": "bun run publisher.ts",
+    "verify:loop": "bun run verifier.ts"
   },
   "dependencies": {
     "viem": "^2.21.0",

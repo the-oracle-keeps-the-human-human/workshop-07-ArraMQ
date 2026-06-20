@@ -49,9 +49,27 @@ export PRIVATE_KEY=0x...                       # demo key only — never real fu
 export NOVA_RPC_URL=https://rpc.nova.example   # any Nova-compat RPC
 export MQTT_BROKER=mqtt://localhost:1883       # or mqtts://localhost:8883 for TLS
 
-bun examples/publisher.ts   # one-shot publish
+bun examples/publisher.ts   # one-shot publish (persists seq to ./.orz-seq.json)
 bun examples/verifier.ts    # long-running subscribe + verify
 ```
+
+## Self-test (no broker needed)
+
+```bash
+cd examples
+bun install
+bun test
+# Expect: PASS x6
+#   01-valid-sig       — happy path
+#   02-tampered-payload — payloadHash mismatch
+#   03-wrong-from       — from mismatch
+#   04-wrong-chainId    — EIP-712 domain separation
+#   05-topic-mismatch   — anti-reroute
+#   06-replay           — (from, topic, seq) cache hit
+```
+
+Sets `VERIFIER_SKIP_BLOCKHASH=1` internally so it runs offline (no Nova RPC).
+Production deployments MUST leave that flag unset.
 
 ## EIP-712 domain (locked, fleet consensus)
 

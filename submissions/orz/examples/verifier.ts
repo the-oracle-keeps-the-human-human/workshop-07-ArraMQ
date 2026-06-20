@@ -29,6 +29,14 @@ const FRESHNESS_BLOCKS = Number(process.env.FRESHNESS_BLOCKS ?? 100); // ~200s o
 const TS_WINDOW_SEC = Number(process.env.TS_WINDOW_SEC ?? 60);
 const MAX_SEEN_ENTRIES = 10_000;
 
+// Test-mode escape hatch — set VERIFIER_SKIP_BLOCKHASH=1 to bypass on-chain block-hash freshness check.
+// USED ONLY by examples/test.ts for offline self-test. Production deploys MUST leave this unset;
+// any verifier honoring this flag without operator opt-in defeats the entire freshness defense.
+// Read at call time (not module load) so tests that set the env before invoking verify() are honored.
+function skipBlockHash(): boolean {
+  return process.env.VERIFIER_SKIP_BLOCKHASH === "1";
+}
+
 const domain = {
   name: "ARRA-MQTT",
   version: "1",
@@ -48,6 +56,14 @@ const types = {
 
 // ---- state -----------------------------------------------------------------
 
+// Why a bounded in-memory cache is enough alongside publisher persistence:
+//   Publisher now persists `lastSeq` to disk and computes seq = max(clockDerived, persistedMax+1n).
+//   Result: seq from any given (from, topic) is monotonically increasing across restarts. Within
+//   the blockHash freshness window (default 100 blocks ≈ 200s on Nova) the set of valid sigs
+//   from one publisher is bounded by their publish rate. So the cache need only cover:
+//     O(active_publishers × window_blocks × pub_rate) entries.
+//   Eg. 100 publishers @ 5 msg/s × 200s window = 100,000 entries. Sized for demo here at 10k.
+//   For full scale → persist the cache too (see PROPOSAL.md §7).
 const seen = new Map<string, number>(); // key = `${from}|${topic}|${seq}` → insertion ts
 const pub = createPublicClient({ transport: http(NOVA_RPC_URL) });
 
@@ -66,7 +82,7 @@ function recordSeen(key: string) {
 
 // ---- verify ----------------------------------------------------------------
 
-type Envelope = {
+export type Envelope = {
   v: number;
   msg: {
     from: `0x${string}`;
@@ -80,7 +96,7 @@ type Envelope = {
   payload: string;
 };
 
-async function verify(
+export async function verify(
   env: Envelope,
   deliveryTopic: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -136,15 +152,17 @@ async function verify(
   }
 
   // (2) blockHash freshness
-  try {
-    const block = await pub.getBlock({ blockHash: msg.blockHash });
-    const head = await pub.getBlock({ blockTag: "latest" });
-    const blockAge = Number(head.number - block.number);
-    if (blockAge < 0 || blockAge > FRESHNESS_BLOCKS) {
-      return { ok: false, reason: `stale blockHash (age=${blockAge} blocks, max=${FRESHNESS_BLOCKS})` };
+  if (!skipBlockHash()) {
+    try {
+      const block = await pub.getBlock({ blockHash: msg.blockHash });
+      const head = await pub.getBlock({ blockTag: "latest" });
+      const blockAge = Number(head.number - block.number);
+      if (blockAge < 0 || blockAge > FRESHNESS_BLOCKS) {
+        return { ok: false, reason: `stale blockHash (age=${blockAge} blocks, max=${FRESHNESS_BLOCKS})` };
+      }
+    } catch (err) {
+      return { ok: false, reason: `unknown blockHash: ${String(err)}` };
     }
-  } catch (err) {
-    return { ok: false, reason: `unknown blockHash: ${String(err)}` };
   }
 
   // (5) replay
@@ -159,33 +177,42 @@ async function verify(
 
 // ---- mqtt loop -------------------------------------------------------------
 
-const client = mqtt.connect(MQTT_BROKER, {
-  clientId: `verifier-${Math.random().toString(16).slice(2, 8)}`,
-  rejectUnauthorized: false,
-});
+export function startBroker() {
+  const client = mqtt.connect(MQTT_BROKER, {
+    clientId: `verifier-${Math.random().toString(16).slice(2, 8)}`,
+    rejectUnauthorized: false,
+  });
 
-client.on("connect", () => {
-  console.log("[verifier] connected, subscribing arra/+/+");
-  client.subscribe("arra/+/+", { qos: 1 });
-});
+  client.on("connect", () => {
+    console.log("[verifier] connected, subscribing arra/+/+");
+    client.subscribe("arra/+/+", { qos: 1 });
+  });
 
-client.on("message", async (topic, buf) => {
-  const startedAt = Date.now();
-  let env: Envelope;
-  try {
-    env = JSON.parse(buf.toString()) as Envelope;
-  } catch {
-    console.log(`[verifier] REJECT bad-json topic=${topic}`);
-    return;
-  }
+  client.on("message", async (topic, buf) => {
+    const startedAt = Date.now();
+    let env: Envelope;
+    try {
+      env = JSON.parse(buf.toString()) as Envelope;
+    } catch {
+      console.log(`[verifier] REJECT bad-json topic=${topic}`);
+      return;
+    }
 
-  const result = await verify(env, topic);
-  const ms = Date.now() - startedAt;
-  if (result.ok) {
-    console.log(`[verifier] OK   from=${env.msg.from} topic=${topic} seq=${env.msg.seq} age=${ms}ms`);
-  } else {
-    console.log(`[verifier] REJECT ${result.reason}  topic=${topic} from=${env.msg.from}`);
-  }
-});
+    const result = await verify(env, topic);
+    const ms = Date.now() - startedAt;
+    if (result.ok) {
+      console.log(`[verifier] OK   from=${env.msg.from} topic=${topic} seq=${env.msg.seq} age=${ms}ms`);
+    } else {
+      console.log(`[verifier] REJECT ${result.reason}  topic=${topic} from=${env.msg.from}`);
+    }
+  });
 
-client.on("error", (err) => console.error("[verifier] mqtt error:", err));
+  client.on("error", (err) => console.error("[verifier] mqtt error:", err));
+  return client;
+}
+
+// Auto-start when invoked as the entry point (not when imported by tests).
+// Bun and Node both populate import.meta.main for the entrypoint script.
+if ((import.meta as { main?: boolean }).main) {
+  startBroker();
+}
