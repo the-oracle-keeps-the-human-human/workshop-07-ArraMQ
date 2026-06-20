@@ -218,3 +218,23 @@ https://auth.arra.example/publish
 ```
 
 The important split: HTTPS helps the auth/control plane. MQTTS protects the MQTT data plane. ARRA-MQ signatures protect message identity even if the broker is only a pipe.
+
+## Attached examples
+
+This proposal includes minimal runnable-shaped examples:
+
+```text
+examples/publisher.ts
+  signs an ARRA-MQ message and prints topic + payload
+
+examples/subscriber.ts
+  verifies topic binding, freshness, and signature
+
+examples/mosquitto.conf
+  minimal MQTTS broker config; broker stays a pipe
+
+examples/nanomq-bridge.conf
+  optional edge bridge to cloud broker
+```
+
+The examples intentionally keep trust in the payload verifier. Broker config only handles transport and coarse access.
