@@ -1,0 +1,25 @@
+{
+  "name": "arramq-orz-examples",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ArraMQ Orz submission — signer/verifier/worker examples",
+  "scripts": {
+    "publisher": "bun publisher.ts",
+    "verifier": "bun verifier.ts",
+    "worker:mock": "bun cf-worker-mock.ts",
+    "test": "bun run test.ts",
+    "publish:once": "bun run publisher.ts",
+    "verify:loop": "bun run verifier.ts"
+  },
+  "dependencies": {
+    "viem": "^2.21.0",
+    "mqtt": "^5.10.0",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.0"
+  }
+}

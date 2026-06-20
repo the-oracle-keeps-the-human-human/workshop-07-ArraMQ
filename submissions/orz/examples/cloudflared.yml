@@ -1,0 +1,30 @@
+# cloudflared.yml — CF Tunnel config exposing MQTT 8883 via TCP ingress.
+#
+# Docs: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/
+#
+# WHAT THIS GIVES YOU (free tier):
+#   - No public TCP listener at origin — `cloudflared` initiates outbound to CF edge.
+#   - DDoS mitigation at CF edge for the tunnel endpoint.
+#   - TLS terminated at CF; broker speaks plain MQTT inside the tunnel.
+#
+# WHAT THIS DOES NOT GIVE YOU:
+#   - Native MQTT 8883 routing from arbitrary clients — clients need to dial through
+#     `cloudflared access tcp` or use the public hostname only if Spectrum is enabled.
+#   - Without Spectrum ($$$), public MQTT clients can't directly reach this tunnel —
+#     they go through a `cloudflared` connector themselves OR use the HTTP /auth +
+#     direct broker DNS path (see dns-srv.zone).
+#
+# See PROPOSAL.md §4 for the honest CF transport map.
+
+tunnel: arra-broker-tunnel
+credentials-file: /etc/cloudflared/arra-broker.json
+
+ingress:
+  - hostname: mqtt.arra.example
+    service: tcp://mosquitto:8883
+    originRequest:
+      proxyType: ""
+      noTLSVerify: true   # self-signed inside tunnel — TLS already done at CF edge
+  - hostname: auth.arra.example
+    service: http://cf-worker-mock:8787
+  - service: http_status:404

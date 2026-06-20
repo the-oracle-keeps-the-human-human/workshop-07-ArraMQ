@@ -1,0 +1,31 @@
+; dns-srv.zone — BIND-format SRV records for ArraMQ broker failover.
+;
+; Clients resolve _mqtt._tcp.arra.ora-fleet.io to get an ordered list of broker hosts,
+; honoring priority + weight. Three replicas across regions; lower priority = preferred.
+;
+; TTL note: 60s is a deliberate trade-off. Shorter = faster failover when a broker dies,
+; but more DNS load + slower clients (no resolver cache benefit). Longer = better caching
+; but stale entries during outage. 60s = "feels live, doesn't hammer DNS".
+;
+; RFC 2782 (SRV): https://datatracker.ietf.org/doc/html/rfc2782
+
+$ORIGIN arra.ora-fleet.io.
+$TTL 60
+
+; --- A records for the three broker replicas -------------------------------
+
+mqtt-a   IN  A   203.0.113.10
+mqtt-b   IN  A   203.0.113.20
+mqtt-c   IN  A   203.0.113.30
+
+; --- SRV record (priority, weight, port, target) ---------------------------
+;
+; Both TLS (8883) and plain (1883) listed; clients pick TLS in production.
+
+_mqtt._tcp       IN  SRV  10  60  8883  mqtt-a.arra.ora-fleet.io.
+_mqtt._tcp       IN  SRV  10  30  8883  mqtt-b.arra.ora-fleet.io.
+_mqtt._tcp       IN  SRV  20  10  8883  mqtt-c.arra.ora-fleet.io.
+
+; Auth Worker — accessed via standard HTTPS, no SRV needed; included as CNAME for clarity.
+
+auth             IN  CNAME  arra-auth.workers.dev.

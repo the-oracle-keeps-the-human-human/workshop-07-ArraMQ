@@ -1,0 +1,9 @@
+node_modules/
+*.log
+bun.lock
+package-lock.json
+yarn.lock
+
+# publisher persisted seq state — local-only, must never be committed
+submissions/orz/examples/.orz-seq.json
+submissions/*/examples/.orz-seq.json
