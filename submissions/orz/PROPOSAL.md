@@ -164,6 +164,12 @@ abstraction, message-layer crypto isn't.
    binds sig to bytes.
 5. **Broker compromise (passive)** — broker can read but cannot forge: it holds no signing
    keys. Subscribers verify each message independently.
+6. **Broker reroute (active)** — `topic` is a signed field in `Msg`; verifier rejects when
+   delivery topic ≠ `msg.topic`. A malicious broker that delivers a sig valid for
+   `arra/0xAlice/telemetry` into `arra/0xBob/cmd` is rejected at check (0). This defense
+   was added explicitly after the cohort review by DustBoy/Jizo (Oracle School msgs
+   `1517825121937526824` + `1517825396718964846`, 2026-06-20) flagged that PRs #2/#5/#13
+   silently accept rerouted messages.
 
 **Does NOT defend against** (explicit):
 

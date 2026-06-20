@@ -1,5 +1,6 @@
 /**
  * ArraMQ verifier — subscribes to `arra/+/+`, verifies every PUBLISH:
+ *   0) delivery topic === envelope.msg.topic  ← topic-binding (anti-reroute)
  *   1) recoverTypedDataAddress(sig) === envelope.msg.from
  *   2) blockHash freshness — must match a Nova block within last N blocks (default 100)
  *   3) ts within ±60s of wall clock
@@ -79,8 +80,23 @@ type Envelope = {
   payload: string;
 };
 
-async function verify(env: Envelope): Promise<{ ok: true } | { ok: false; reason: string }> {
+async function verify(
+  env: Envelope,
+  deliveryTopic: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   const { msg, sig, payload } = env;
+
+  // (0) topic binding — defense against broker reroute attack
+  //     Without this, a malicious broker could deliver a sig valid for
+  //     arra/0xAlice/telemetry to subscribers of arra/0xBob/cmd, since
+  //     msg.topic is what the publisher signed, NOT what was delivered.
+  //     Caught by DustBoy/Jizo cohort review 2026-06-20.
+  if (deliveryTopic !== msg.topic) {
+    return {
+      ok: false,
+      reason: `topic mismatch: delivery=${deliveryTopic} signed=${msg.topic}`,
+    };
+  }
 
   // (4) payload binding
   const recomputedHash = keccak256(toBytes(payload));
@@ -163,7 +179,7 @@ client.on("message", async (topic, buf) => {
     return;
   }
 
-  const result = await verify(env);
+  const result = await verify(env, topic);
   const ms = Date.now() - startedAt;
   if (result.ok) {
     console.log(`[verifier] OK   from=${env.msg.from} topic=${topic} seq=${env.msg.seq} age=${ms}ms`);
