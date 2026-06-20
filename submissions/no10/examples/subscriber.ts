@@ -1,29 +1,59 @@
-import { verifyMessage } from 'viem';
+import { verifyTypedData } from 'viem';
+import { keccak256, stringToHex } from 'viem';
 import * as mqtt from 'mqtt';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// EIP-712 Domain Definition
+const domain = {
+  name: 'ARRA-MQTT',
+  version: '1',
+  chainId: 20260619,
+} as const;
+
+// EIP-712 Types Definition
+const types = {
+  Message: [
+    { name: 'from', type: 'address' },
+    { name: 'ts', type: 'uint64' },
+    { name: 'topic', type: 'string' },
+    { name: 'dataHash', type: 'bytes32' },
+    { name: 'seq', type: 'uint64' },
+  ],
+} as const;
 
 interface ArraMQMessage {
   from: string;
   ts: number;
   topic: string;
   data: any;
+  seq: string;
   sig: `0x${string}`;
 }
 
 const MQTT_URL = process.env.MQTT_URL || 'mqtt://localhost:1883';
 const client = mqtt.connect(MQTT_URL);
 
-// In-memory seen signatures cache to prevent duplicate verbatim replay within the skew window
-const seenSignatures = new Map<string, number>(); // sig -> timestamp (seconds)
+// Persistent sequence store (survives subscriber restarts / crashes)
+const SEQ_STORE_FILE = path.join(__dirname, 'seq_store.json');
+let lastSeenSeq: Record<string, string> = {};
 
-// Periodic cleanup of expired signatures from the cache
-setInterval(() => {
-  const now = Math.floor(Date.now() / 1000);
-  for (const [sig, ts] of seenSignatures.entries()) {
-    if (now - ts > 30) {
-      seenSignatures.delete(sig);
-    }
+if (fs.existsSync(SEQ_STORE_FILE)) {
+  try {
+    lastSeenSeq = JSON.parse(fs.readFileSync(SEQ_STORE_FILE, 'utf8'));
+  } catch (e) {
+    lastSeenSeq = {};
   }
-}, 10000);
+}
+
+function saveLastSeenSeq(publisher: string, seq: bigint) {
+  lastSeenSeq[publisher.toLowerCase()] = seq.toString();
+  try {
+    fs.writeFileSync(SEQ_STORE_FILE, JSON.stringify(lastSeenSeq, null, 2));
+  } catch (err) {
+    console.error('[Verifier] Failed to persist sequence number store:', err);
+  }
+}
 
 // Simple Authorization Allowlist (ACL mapping topic to authorized Ethereum addresses)
 const authorizedPublishers: Record<string, string[]> = {
@@ -34,7 +64,9 @@ const authorizedPublishers: Record<string, string[]> = {
 
 async function verifyMessagePayload(topic: string, message: ArraMQMessage): Promise<boolean> {
   const currentTs = Math.floor(Date.now() / 1000);
-  
+  const publisher = message.from.toLowerCase();
+  const seq = BigInt(message.seq);
+
   // 1. Strict Freshness check: reject stale messages AND future timestamps (pre-signing)
   const skew = currentTs - message.ts;
   if (skew < 0 || skew > 30) {
@@ -42,10 +74,14 @@ async function verifyMessagePayload(topic: string, message: ArraMQMessage): Prom
     return false;
   }
 
-  // 2. Signature seen-cache check: prevent duplicate replay of the exact same message inside the window
-  if (seenSignatures.has(message.sig)) {
-    console.error(`[Verifier] Rejected: Replay attack detected. Signature already processed.`);
-    return false;
+  // 2. Persistent Monotonic Sequence check: reject duplicate or out-of-order sequence replays
+  const lastSeqStr = lastSeenSeq[publisher];
+  if (lastSeqStr !== undefined) {
+    const lastSeq = BigInt(lastSeqStr);
+    if (seq <= lastSeq) {
+      console.error(`[Verifier] Rejected: Replay attack detected. Sequence ${seq} is not greater than last seen ${lastSeq}`);
+      return false;
+    }
   }
 
   // 3. Topic binding check: ensure topic in signed payload matches the actual target topic
@@ -56,24 +92,34 @@ async function verifyMessagePayload(topic: string, message: ArraMQMessage): Prom
 
   // 4. Authorization check: ensure publisher is allowed to write to this topic
   const allowedAddrs = authorizedPublishers[topic];
-  if (!allowedAddrs || !allowedAddrs.includes(message.from.toLowerCase())) {
+  if (!allowedAddrs || !allowedAddrs.includes(publisher)) {
     console.error(`[Verifier] Rejected: Publisher ${message.from} is not authorized for topic ${topic}`);
     return false;
   }
 
-  // 5. EIP-191 Cryptographic Signature verification
-  const signText = `ARRA-MQTT/v1\nAddress: ${message.from}\nTimestamp: ${message.ts}\nTopic: ${message.topic}\nPayload: ${JSON.stringify(message.data)}`;
-  
+  // 5. EIP-712 Typed Data cryptographic signature verification
+  const dataStr = JSON.stringify(message.data);
+  const dataHash = keccak256(stringToHex(dataStr));
+
   try {
-    const isValid = await verifyMessage({
+    const isValid = await verifyTypedData({
       address: message.from as `0x${string}`,
-      message: signText,
+      domain,
+      types,
+      primaryType: 'Message',
+      message: {
+        from: message.from as `0x${string}`,
+        ts: BigInt(message.ts),
+        topic: message.topic,
+        dataHash,
+        seq,
+      },
       signature: message.sig,
     });
 
     if (isValid) {
-      // Record signature in cache to prevent replay
-      seenSignatures.set(message.sig, message.ts);
+      // Record sequence number to persistent store
+      saveLastSeenSeq(publisher, seq);
       return true;
     }
     return false;
@@ -100,10 +146,10 @@ client.on('message', async (topic, payload) => {
     const isValid = await verifyMessagePayload(topic, rawMessage);
     
     if (isValid) {
-      console.log(`[Subscriber] ✅ Message VALIDATED. Publisher: ${rawMessage.from}`);
+      console.log(`[Subscriber] ✅ Message VALIDATED. Publisher: ${rawMessage.from} | Sequence: ${rawMessage.seq}`);
       console.log(`[Subscriber] Data:`, JSON.stringify(rawMessage.data));
     } else {
-      console.warn(`[Subscriber] ❌ Message REJECTED. Signature invalid, stale, or spoofed.`);
+      console.warn(`[Subscriber] ❌ Message REJECTED. Signature invalid, stale, or replayed.`);
     }
   } catch (err) {
     console.error('[Subscriber] Error parsing message JSON payload:', err);
