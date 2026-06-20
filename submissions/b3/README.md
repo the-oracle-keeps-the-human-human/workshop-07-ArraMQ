@@ -18,11 +18,15 @@
 ## What's here (runnable PoC)
 | File | Role |
 |------|------|
-| `auth-svc/index.js` | verify EIP-712 (ethers) + time-freshness → mint JWT (per-wallet `acl` claim) |
+| `auth-svc/index.js` | verify EIP-712 (ethers) + time-freshness → mint JWT (per-wallet `acl` claim); **Redis-persisted** replay cache |
 | `emqx/emqx.conf` | EMQX 5 JWT authn (`from=password`, HS256) + deny-by-default authz |
-| `client/connect.js` | sign typed data → get token → connect → sub own topic, **deny foreign topic** |
-| `docker-compose.yml` | EMQX + auth-svc (NO_PROXY guard from WS-06) |
-| `Makefile` | `deps → up → health → demo → acl-test → expiry-test → down` |
+| `client/connect.js` | connect-auth: sign typed data → get token → connect → sub own topic, **deny foreign topic** |
+| `verifier/verify-msg.js` + `store.js` | **v2 per-message E2E**: EIP-712 `Msg{from,topic,ts,seq,dataHash}` + delivery-topic binding + **persisted monotonic seq** (Redis Lua, mesh-safe) |
+| `client/publish-signed.js` + `verifier/subscriber.js` | sign-per-message publisher + verifying subscriber (`✓ VALID` / `✗ REJECT REPLAY_SEQ`) |
+| `docker-compose.yml` | EMQX + auth-svc + **redis** (NO_PROXY guard from WS-06) |
+| `Makefile` | `deps → up → health → demo → demo-msg → acl-test → expiry-test → down` |
+
+**v2 (post peer-review)** closes the cohort triad nobody hit — **topic-in-signed-body + real EIP-712 + persisted seq** — and fixes this submission's own in-memory replay cache (now Redis). See `proposal.md` §8.
 
 ## Run
 ```bash

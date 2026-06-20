@@ -18,8 +18,16 @@ const types  = { Auth: [
   { name: "scope",    type: "string"  },   // e.g. "pubsub"
 ]};
 
-const seen = new Map();   // optional replay-proofing: signature -> expiry (lazy nonce)
-setInterval(() => { const now = Date.now(); for (const [k,v] of seen) if (v < now) seen.delete(k); }, 30_000);
+// Replay-proofing — Redis (persisted, survives restart/scale) with in-memory DEMO fallback.
+let redis = null;
+if (process.env.REDIS_URL) { const { default: Redis } = await import("ioredis"); redis = new Redis(process.env.REDIS_URL); }
+const memSeen = new Map();
+setInterval(() => { const now = Date.now(); for (const [k,v] of memSeen) if (v < now) memSeen.delete(k); }, 30_000);
+async function seenOnce(sig, ttl) {                    // true the FIRST time, false on replay
+  if (redis) return (await redis.set(`seen:${sig}`, "1", "EX", ttl, "NX")) === "OK";
+  if (memSeen.has(sig)) return false;
+  memSeen.set(sig, Date.now() + ttl * 1000); return true;
+}
 
 const app = express();
 app.use(express.json());
@@ -39,9 +47,8 @@ app.post("/auth", (req, res) => {
     if (ageS < -30 || ageS > MAX_AGE_S)
       return res.status(401).json({ error: `stale or future signature (age ${ageS}s)` });
 
-    // 3) optional replay-proof without a pre-fetched nonce
-    if (seen.has(signature)) return res.status(401).json({ error: "replay" });
-    seen.set(signature, Date.now() + MAX_AGE_S * 1000);
+    // 3) replay-proof without a pre-fetched nonce (persisted in Redis when configured)
+    if (!(await seenOnce(signature, MAX_AGE_S))) return res.status(401).json({ error: "replay" });
 
     // 4) mint MQTT token with per-wallet EMQX ACL claim
     const addr = getAddress(address);

@@ -1,0 +1,10 @@
+{
+  "name": "arramq-client",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "ArraMQ client — SIWE/EIP-712 connect + per-message signed publish (B3 Oracle)",
+  "dependencies": {
+    "ethers": "^6.13.0",
+    "mqtt": "^5.10.0"
+  }
+}

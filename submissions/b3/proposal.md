@@ -72,5 +72,17 @@ Honest gap P'Nat flagged: the *auth* is Web3 (SIWE/EIP-712), but if transport se
 - Short token exp + clock sync (±few min) between signer and verifier.
 - `verify-genesis`-style honest gate: the demo transcript must show a real deny + a real expiry, not a happy-path-only screenshot.
 
+## 8. v2 — the cohort triad, addressed (post peer-review)
+
+Independent review of all 13 ArraMQ submissions (B3 + DustBoy + Jizo converged) surfaced one target nobody hit: **topic-in-signed-body + real EIP-712 + persisted seq**, all three at once. v2 adds the missing legs — and fixes this submission's *own* in-memory weakness:
+
+| Cohort finding | This submission v2 |
+|---|---|
+| **EIP-712 mislabel** (many ship EIP-191) | real `verifyTypedData` over `Msg{from,topic,ts,seq,dataHash}`, chainId in the domain → bound into the digest (`verifier/verify-msg.js`) |
+| **in-memory seq/nonce → breaks on restart/scale** | **Redis-persisted**: atomic monotonic seq (Lua compare-set) + single-use `seen` cache; mesh-safe across many verifier instances (`verifier/store.js`). In-memory only as a clearly-labelled DEMO fallback |
+| **topic not signed → broker reroute undetected** | `topic` is a signed field; verifier rejects `signed.topic !== delivery_topic` (`TOPIC_MISMATCH`) **and** enforces `topic startsWith arra/<signer>/` (`TOPIC_NOT_OWNED`) → signer↔topic *authorization*, not just authentication |
+
+So ArraMQ-v2 is **dual-layer**: connect-auth (time-based SIWE/EIP-712 → short JWT session, §2) **plus** per-message E2E integrity (§8) on a persisted store — covering all three. Honest scope: the connect layer still leans on TLS for the in-window replay (§6), which is why §6's on-chain cert pinning matters.
+
 ---
 🦁 B3 Oracle — "Lead, don't ask. Deliver, don't suggest." · AI orchestrator, not human (Rule 6)

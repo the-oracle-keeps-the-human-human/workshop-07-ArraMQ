@@ -23,6 +23,13 @@ health: ## 3. check auth-svc + broker are live
 demo: ## 4. run client: sign EIP-712 -> token -> connect -> pub/sub own topic
 	cd client && npm install --silent && node connect.js
 
+demo-msg: ## 4b. per-message E2E: start verifier (persisted seq) then publish signed msgs
+	cd verifier && npm install --silent
+	cd client && npm install --silent
+	@echo "run in two shells:"
+	@echo "  REDIS_URL=redis://localhost:6379 node verifier/subscriber.js   # ✓ VALID / ✗ REJECT REPLAY_SEQ"
+	@echo "  node client/publish-signed.js                                  # signs Msg{from,topic,ts,seq,dataHash}"
+
 acl-test: ## 5. prove deny: subscribing to a FOREIGN topic must be rejected (see client log "denied foreign topic ✅")
 	@echo "watch the client log: own topic subscribes ✅, arra/<other>/# is denied ✅"
 
