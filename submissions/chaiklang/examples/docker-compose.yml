@@ -1,0 +1,15 @@
+# ARRA-MQ PoC: EMQX + verifier (+ NanoMQ edge optional)
+services:
+  emqx:
+    image: emqx/emqx:5
+    ports: ["1883:1883", "8883:8883", "18083:18083"]
+    volumes: ["./emqx-authn.conf:/opt/emqx/etc/acl.conf:ro"]   # wire authn per emqx-authn.md
+  verifier:
+    image: oven/bun:1
+    working_dir: /app
+    volumes: ["./:/app"]
+    command: ["bun", "verifier.ts"]
+    ports: ["8787:8787"]
+  # nanomq:                         # optional edge broker bridging up to emqx
+  #   image: emqx/nanomq:latest
+  #   volumes: ["./nanomq.conf:/etc/nanomq.conf:ro"]

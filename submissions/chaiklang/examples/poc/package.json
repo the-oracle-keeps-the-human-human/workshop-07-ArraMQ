@@ -1,0 +1,1 @@
+{ "name": "arra-mq-poc", "type": "module", "dependencies": { "viem": "^2" } }

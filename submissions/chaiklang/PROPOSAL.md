@@ -1,0 +1,100 @@
+# ARRA-MQ — Proposal (ChaiKlang / ชายกลาง 🦁)
+
+> SIWE / EIP-712 authenticated MQTT — **identity lives in the signed message, not the broker.**
+> AI author (Rule 6). Design converged with BM, 2026-06-20.
+
+## 1. แนวคิดหลัก (the one idea)
+**Trust อยู่ใน signed message ไม่ใช่ที่ broker.** ทุก payload เซ็นด้วย Ethereum key (EIP-712, domain `ARRA-MQTT`) → ปลายทาง `recover` address จาก signature ก็รู้ว่าใครส่ง + ของจริงไหม. ผลคือ **broker เป็นแค่ท่อขนส่งโง่ๆ** → ใช้ EMQX / NanoMQ / Mosquitto / bridge mesh ตัวไหน topology ไหนก็ได้ (decentralized-friendly).
+
+## 2. ทำไมต้องสร้าง (gap)
+SIWE (EIP-4361) มี · MQTT broker auth (JWT/HTTP) มี · **แต่ยังไม่มีใครต่อ 2 อันเป็น package** (verified ด้วย web search 2026-06-20). ARRA-MQ = bridge ที่ขาดอยู่นั้น.
+
+## 3. Design (simple where possible, anti-replay where needed)
+
+### 3.1 Connect auth — time-based, stateless
+```
+username = ETH address
+password = sign(EIP-712{ address, issued_at })   domain = ARRA-MQTT
+broker (EMQX HTTP-auth) → verifier: recover address + (now - issued_at) < maxAge ~5m
+→ ไม่มี nonce store, ไม่มี round-trip
+```
+
+### 3.2 Per-message — EIP-712 signed payload (self-proving)
+```
+payload = { data, ts, sig }   sig = EIP-712 sign(domain ARRA-MQTT, { topic, data, ts })
+consumer verify → recover address + เช็ค recovered topic == delivery topic (topic-binding กัน broker-reroute) · replay เก่า = ts บอกว่าเก่า
+```
+
+### 3.3 Control command — + monotonic counter (anti-replay)
+```
+payload = { cmd, seq, sig }
+server: reject ถ้า seq <= last_seq[address]   (เก็บใน **CF Durable Object / Redis** — persisted, ไม่ใช่ in-memory ที่พังตอน restart/scale)
+→ กัน replay คำสั่ง "เปิด/ปิด" โดยไม่ต้อง nonce round-trip / ไม่พึ่ง clock
+```
+
+### 3.4 ACL — on-chain registry
+address → topic permission อ่านจาก contract บน **ARRA L2 (chainId 20260619)** (หรือ off-chain map สำหรับ PoC). EMQX authz enforce.
+
+### 3.5 Security
+- **EIP-712 domain `ARRA-MQTT` v1 + chainId 20260619** → domain separation = กัน cross-domain/chain replay ในตัว
+- TLS เสมอ (กัน sniff)
+- bridge link = static service cred; per-message sig รอดข้าม bridge = end-to-end integrity
+
+## 4. Core code (viem — ทั้งหมดอยู่ที่ message level)
+```ts
+import { privateKeyToAccount } from 'viem/accounts'
+import { recoverTypedDataAddress } from 'viem'
+const domain = { name: 'ARRA-MQTT', version: '1', chainId: 20260619 } as const
+const types  = { Msg: [{ name: 'data', type: 'string' }, { name: 'ts', type: 'uint256' }] } as const
+
+const acct = privateKeyToAccount(DEVICE_KEY)
+async function signMsg(data: string) {
+  const ts = BigInt(Date.now())
+  const sig = await acct.signTypedData({ domain, types, primaryType: 'Msg', message: { data, ts } })
+  return JSON.stringify({ data, ts: ts.toString(), sig })
+}
+async function verify(packet: string, maxAgeMs = 300_000) {
+  const { data, ts, sig } = JSON.parse(packet)
+  const addr = await recoverTypedDataAddress({ domain, types, primaryType: 'Msg',
+    message: { data, ts: BigInt(ts) }, signature: sig })
+  if (Date.now() - Number(ts) > maxAgeMs) return null
+  return addr  // verified sender
+}
+```
+
+## 5. Stack
+- broker: **EMQX** (central, cluster, HTTP auth) + **NanoMQ** (edge, native HTTP auth, QUIC bridge) / Mosquitto
+- verifier: tiny **Bun/Node** service (CF Worker-friendly) — recover EIP-712 + freshness + counter (KV)
+- client: **viem** signer
+- chain: **ARRA L2** (20260619) — ACL registry + identity domain
+
+## 6. Economics
+Edge NanoMQ รวบ device → bridge ขึ้น EMQX(/Cloud) → Cloud เห็นแค่จำนวน gateway (ไม่ใช่ทุก device) = ลด connection/traffic quota เยอะ.
+
+## 7. PoC — DONE ✅ (รัน 7/7 ผ่าน · `examples/poc/`)
+`cd examples/poc && bun install && bun demo.ts` → 7/7 pass. พิสูจน์ **all three** ที่ cohort ว่ายังไม่มีใครครบ:
+- (1) topic-in-signed-body → reroute delivery topic = BAD_TOPIC
+- (2) real EIP-712 (domain ARRA-MQTT, chainId 20260619) → tamper = BAD_SIG
+- (3) **persisted seq** → replay เก่า **ยังถูก reject หลัง verifier restart** (reload จาก disk = DO/Redis)
++ valid accept · replay seq = REPLAY. (verify-before-claim: รันแล้วเจอ test-bug ts mismatch → fix → 7/7)
+
+### (เดิม) PoC plan
+`docker-compose up` → EMQX + verifier + client signer + (NanoMQ edge + bridge) →
+- เซ็น telemetry → consumer verify ✅
+- control command → counter กัน replay ✅
+- bad/expired/replayed sig → reject ✅
+- (stretch) ACL จาก on-chain registry
+
+## 8. แผน
+proposal นี้ (PR) → feedback → build PoC → PR ตามด้วยโค้ดรันได้ + Makefile/compose
+
+— ChaiKlang Oracle (ชายกลาง) · AI, Rule 6
+
+## 9. Example code + config (ดู `examples/`)
+- `examples/verifier.ts` — EMQX HTTP-auth target (Bun/CF Worker): recover EIP-712 connect-sig + freshness + monotonic counter สำหรับ control
+- `examples/client.ts` — device signer: connect (time-based) + per-message (EIP-712) ผ่าน mqtt.js + viem
+- `examples/emqx-authn.md` — EMQX 5.x HTTP authn config ชี้ไป verifier (`{"result":"allow"|"deny"}`)
+- `examples/nanomq.conf` — NanoMQ edge bridge → central EMQX (aggregate)
+- `examples/docker-compose.yml` — PoC: EMQX + verifier (+ NanoMQ optional) — `docker compose up`
+
+> CF production: verifier → CF Worker, counter → Durable Object (strongly-consistent), ACL → KV. transport: MQTT-over-WS ผ่าน CF หรือ raw MQTT ผ่าน CF Tunnel/Spectrum
