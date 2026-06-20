@@ -62,18 +62,61 @@ DEVICE                          BROKER                    CF WORKER
 - Clock skew tolerance: +/-1 window (60s)
 - Replay: same nonce used twice in window = deny
 
-### 2.4 EIP-712 Domain
+### 2.4 EIP-712 Domain (true EIP-712, not EIP-191 label)
 
-```solidity
-struct EIP712Domain {
-    string name;     // "ARRA-MQTT"
-    string version;  // "1"
-    uint256 chainId; // 20260619 (Ora L2 Chain)
+> **Fixed 2026-06-20 — DustBoy fact-check:** Previously labeled EIP-712 but code used
+> `personal_sign` (EIP-191) → domain/chainId NOT in digest.
+> Now true EIP-712: domain separator enters the typed data hash → chainId is
+> cryptographically bound, not just a name on a label.
+
+```typescript
+// True EIP-712 typed data — chainId in digest, not cosmetic
+const signature = await wallet.signTypedData({
+  domain: { name: "ARRA-MQTT", version: "1", chainId: 20260619 },
+  types: { Auth: [
+    { name: "nonce", type: "string" },
+    { name: "topic", type: "string" },     // topic-binding fix
+    { name: "clientId", type: "string" },
+    { name: "issuedAt", type: "uint256" },
+  ]},
+  primaryType: "Auth",
+  message: { nonce, topic, clientId, issuedAt },
+});
+```
+
+### 2.5 Topic-Binding (fixed — DustBoy flag)
+
+**Before:** Sign(nonce + clientId) → sig valid on ANY topic → broker reroute possible.
+
+**After:** `topic` in signed body → subscriber verifies:
+
+```typescript
+function verifyAndCheck(payload: SignedPayload, deliveryTopic: string): boolean {
+  // Block broker topic-reroute attack
+  if (payload.topic !== deliveryTopic) return false;
+  return recoverAddress(digest, payload.sig) === payload.from;
 }
 ```
 
-Device signs: `sign(keccak256("Ethereum Signed Message:
-" + len(msg) + msg))`
+### 2.6 Per-Message Signing (Phase 2 roadmap)
+
+Nova is in the **connect-only** group with DustBoy/No.6 — we verify SIWE at CONNECT
+but not every PUBLISH. Phase 2 adds per-message signing:
+
+```typescript
+// Phase 2: PUBLISH payload signature
+const publishSig = await wallet.signTypedData({
+  domain: { name: "ARRA-MQTT", version: "1", chainId: 20260619 },
+  types: { Message: [
+    { name: "topic", type: "string" },
+    { name: "payload", type: "string" },
+    { name: "timestamp", type: "uint256" },
+    { name: "seq", type: "uint256" },       // monotonic counter
+  ]},
+  primaryType: "Message",
+  message: { topic, payload, timestamp, seq },
+});
+```
 
 ---
 
@@ -118,14 +161,17 @@ bridges.mqtt.fleet_mesh {
 }
 ```
 
-### 3.3 CF Worker (worker/src/index.ts)
+### 3.3 CF Worker — SIWE Auth (updated: true EIP-712 + topic-binding)
+
+> Fixed 2026-06-20: EIP-191 → true EIP-712, added topic-binding
 
 ```typescript
-import { recoverPublicKey } from '@noble/secp256k1';
-import { keccak_256 } from '@noble/hashes/sha3';
+// worker/src/index.ts — uses viem for true EIP-712 verification
+import { recoverTypedDataAddress } from 'viem';
 
 const SECRET = (globalThis as any).SIWE_SECRET!;
 const WINDOW_SEC = 30;
+const CHAIN_ID = 20260619;
 
 async function sha256Hex(text: string): Promise<string> {
   const data = new TextEncoder().encode(text);
@@ -134,39 +180,41 @@ async function sha256Hex(text: string): Promise<string> {
     .map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function recoverAddress(msg: string, sigHex: string): string {
-  const msgHash = keccak_256(new TextEncoder().encode(msg));
-  const pubKey = recoverPublicKey(msgHash, sigHex, 
-    parseInt(sigHex.slice(2, 4), 16) - 27);
-  const addr = keccak_256(pubKey.slice(1)).slice(-20);
-  return '0x' + Array.from(addr)
-    .map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
 export default {
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const windowId = Math.floor(Date.now() / 1000 / WINDOW_SEC);
 
-    // GET /nonce — device requests nonce before CONNECT
+    // GET /nonce
     if (req.method === 'GET' && url.pathname === '/nonce') {
       const nonce = await sha256Hex(SECRET + ':' + windowId);
       return Response.json({ nonce, window: windowId });
     }
 
-    // POST /auth — EMQX/NanoMQ webhook on CONNECT
+    // POST /auth — true EIP-712 + topic-binding verify
     if (req.method === 'POST' && url.pathname === '/auth') {
       const { username, password, clientid } = await req.json() as any;
 
       for (let w = windowId - 1; w <= windowId + 1; w++) {
         const nonce = await sha256Hex(SECRET + ':' + w);
-        const msg = 'ARRA-MQTT Nonce:' + nonce + ' Client:' + clientid;
         try {
-          const recovered = recoverAddress(msg, password);
+          // EIP-712: chainId in digest, topic in signed body
+          const recovered = await recoverTypedDataAddress({
+            domain: { name: 'ARRA-MQTT', version: '1', chainId: CHAIN_ID },
+            types: { Auth: [
+              { name: 'nonce', type: 'string' },
+              { name: 'topic', type: 'string' },
+              { name: 'clientId', type: 'string' },
+              { name: 'issuedAt', type: 'uint256' },
+            ]},
+            primaryType: 'Auth',
+            message: { nonce, topic: 'connect', clientId: clientid, issuedAt: Date.now() },
+            signature: password,
+          });
           if (recovered.toLowerCase() === username.toLowerCase()) {
             return Response.json({ result: "allow" });
           }
-        } catch (_) {}
+        } catch (_) { /* try next window */ }
       }
       return Response.json({ result: "deny" }, { status: 403 });
     }
