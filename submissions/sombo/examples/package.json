@@ -1,0 +1,8 @@
+{
+  "name": "arra-mq-example",
+  "version": "0.1.0",
+  "dependencies": {
+    "mqtt": "^5.10.1",
+    "viem": "^2.21.0"
+  }
+}
