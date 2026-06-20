@@ -1,0 +1,83 @@
+# docker-compose.yml — ArraMQ local demo (Orz submission).
+#
+# Brings up:
+#   - mosquitto         Mosquitto 2.x broker (TLS on 8883, plain on 1883 for demo)
+#   - cf-worker-mock    Express stub that mimics the real CF Worker /auth + /health
+#   - verifier          Long-running subscriber, prints OK/REJECT per message
+#   - publisher         One-shot signer + publisher (run on demand)
+#
+# HONEST: this compose uses the OFFICIAL eclipse-mosquitto image WITHOUT mosquitto-go-auth
+# loaded — the auth-plugin path requires a custom image build (see iegomez/mosquitto-go-auth
+# README). For the local demo we keep `allow_anonymous true` so the per-message EIP-712
+# verifier is what proves the authenticity story end-to-end. Section 4 / §7 of PROPOSAL.md
+# explains the production swap.
+
+services:
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: arra-mosquitto
+    ports:
+      - "1883:1883"
+      - "8883:8883"
+    volumes:
+      - ./mosquitto-demo.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      - arra
+    command: ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
+
+  cf-worker-mock:
+    image: oven/bun:1
+    container_name: arra-cf-worker-mock
+    working_dir: /app
+    volumes:
+      - ./cf-worker-mock.ts:/app/cf-worker-mock.ts:ro
+      - ./package.json:/app/package.json:ro
+    command: ["sh", "-c", "bun install && bun cf-worker-mock.ts"]
+    environment:
+      PORT: "8787"
+      JWT_SECRET: "demo-only-not-a-real-secret"
+    ports:
+      - "8787:8787"
+    networks:
+      - arra
+
+  verifier:
+    image: oven/bun:1
+    container_name: arra-verifier
+    working_dir: /app
+    depends_on:
+      - mosquitto
+    volumes:
+      - ./verifier.ts:/app/verifier.ts:ro
+      - ./package.json:/app/package.json:ro
+    command: ["sh", "-c", "bun install && bun verifier.ts"]
+    environment:
+      MQTT_BROKER: "mqtt://mosquitto:1883"
+      NOVA_RPC_URL: "${NOVA_RPC_URL:-https://rpc.nova.example}"
+      FRESHNESS_BLOCKS: "100"
+      TS_WINDOW_SEC: "60"
+    networks:
+      - arra
+
+  publisher:
+    image: oven/bun:1
+    container_name: arra-publisher
+    working_dir: /app
+    depends_on:
+      - mosquitto
+    volumes:
+      - ./publisher.ts:/app/publisher.ts:ro
+      - ./package.json:/app/package.json:ro
+    command: ["sh", "-c", "bun install && bun publisher.ts"]
+    environment:
+      MQTT_BROKER: "mqtt://mosquitto:1883"
+      NOVA_RPC_URL: "${NOVA_RPC_URL:-https://rpc.nova.example}"
+      PRIVATE_KEY: "${PRIVATE_KEY:?set PRIVATE_KEY env (demo key only — never real funds)}"
+    networks:
+      - arra
+    profiles: ["on-demand"]   # don't auto-start; run via: docker compose run --rm publisher
+
+networks:
+  arra:
+    driver: bridge
