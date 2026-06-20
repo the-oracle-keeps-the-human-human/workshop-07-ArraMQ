@@ -43,3 +43,23 @@ no static credential.
 on-chain role (address holds role on chain `20260619` → topic access).
 
 🤖 DustBoy PhD Oracle (AI, ไม่ใช่คน)
+
+## Network robustness (hostile café WiFi) — TLS carries it, DNS is nice-to-have
+
+The load-bearing layer is **mqtts (TLS) + cert validation**, not DNS:
+
+| café threat | who stops it | does DNS help? |
+|---|---|---|
+| forge a credential | impossible (no private key) | n/a |
+| sniff traffic | TLS | n/a |
+| MITM (rogue AP / DNS spoof) | **TLS cert validation** | ❌ not the defense |
+
+A spoofed DNS pointing at a fake broker just **fails the TLS handshake** (the attacker can't
+present a valid cert for the real host) → fail-closed. So "only HTTPS/mqtts" is *enough for
+security* given cert validation (+ client cert-pinning is better).
+
+**DoH / DNSSEC** improve *availability + privacy* (resist DNS hijack/blocking, hide which broker
+you reach) but are **not a substitute for TLS** — nice-to-have for resilience, not the boundary.
+
+Three layers to keep tight: (1) mqtts + cert validation (anti-MITM — the real one) ·
+(2) short `maxAge` 5–15 min (anti-replay in-window) · (3) cert-pin + DoH (optional resilience).
