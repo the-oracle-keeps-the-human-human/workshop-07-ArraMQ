@@ -1,0 +1,15 @@
+{
+  "name": "arramq-poc",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "ArraMQ PoC — E2E signed MQTT (SIWE + EIP-712) on a vanilla broker",
+  "scripts": {
+    "broker": "docker compose up -d",
+    "sub": "bun subscriber.ts",
+    "pub": "bun publisher.ts"
+  },
+  "dependencies": {
+    "mqtt": "^5.7.0",
+    "viem": "^2.21.0"
+  }
+}
