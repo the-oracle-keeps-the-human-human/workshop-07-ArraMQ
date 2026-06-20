@@ -4,7 +4,27 @@ ARRA-MQ is a decentralized, cryptographically verifiable MQTT edge-to-cloud brid
 
 ---
 
-## 📐 1. System Architecture
+## 🛡️ 1. The Three-Pillar Security Architecture (PoC Implemented)
+
+Following the cohort consensus, this PR implements the three core pillars that define the most secure and robust MQTT signing design space:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                      ARRA-MQ Guard                       │
+├──────────────────────────────────────────────────────────┤
+│  1. EIP-712 Domain Separator (ARRA-MQTT, chain:20260619) │
+│  2. Topic-Binding (Verifies signed topic == delivered)    │
+│  3. Persistent Seq tracking (Prevents replay via store) │
+└──────────────────────────────────────────────────────────┘
+```
+
+1. **EIP-712 Domain Separation (Real EIP-712):** Not just EIP-191 string prefixing. We incorporate the `chainId` (20260619) and EIP-712 domain separation to completely prevent cross-chain and cross-app signature reuse.
+2. **Strict Topic Binding:** The topic name is included inside the EIP-712 typed structure. The verifier strictly checks that the signed topic in the envelope matches the actual MQTT delivery topic (`actualDeliveryTopic`). This eliminates the threat of a malicious broker rerouting a valid signature from topic A to topic B.
+3. **Persistent Sequence Store:** Replay protection is enforced by tracking the monotonically increasing sequence number (`seq`). To prevent the protection from failing silently when the verifier restarts/scales, the PoC utilizes a persistent JSON file database (`seq_store.json`) to persist sequence counts per sender address (scalable to Redis/Durable Objects in production).
+
+---
+
+## 📐 2. System Architecture
 
 ```mermaid
 graph TD
@@ -16,17 +36,9 @@ graph TD
     Cloud -->|6. Store / Event stream| L2[ARRA Oracle Blockchain]
 ```
 
-### Key Architectural Pillars:
-1. **Stateless Edge Connection:** Clients authenticate to the broker using a standard stateless username/password token (e.g. a pre-signed SIWE timestamp token) or bypass connection auth completely, shifting validation responsibility to the message payload layer.
-2. **EIP-712 Message-Level Integrity:** Every telemetry packet is signed by the client's Ethereum Private Key.
-3. **No Nonce Overhead (Freshness via Time-Stamp):** To prevent replay attacks without keeping state databases on resource-constrained edge devices, signatures are validated using a **time-to-live (TTL) freshness window** (e.g., messages are valid only if the signature timestamp is within $\pm 5$ seconds of the validator's local time).
-4. **NanoMQ Actor-Model Routing:** Utilizing NanoMQ as the edge broker for multi-threaded performance and built-in HTTP Webhook Authentication capability.
-
 ---
 
-## 🔒 2. EIP-712 Signature Specification
-
-To ensure domain separation and prevent Cross-App replay attacks, all published payloads must sign typed data matching the `ARRA-MQTT` domain.
+## 🔒 3. EIP-712 Signature Specification
 
 ### Domain Separation
 ```typescript
@@ -45,21 +57,10 @@ const types = {
     { name: 'topic', type: 'string' },
     { name: 'ts', type: 'uint64' },     // Unix Epoch timestamp in seconds
     { name: 'seq', type: 'uint64' },    // Monotonically increasing sequence number
-    { name: 'data', type: 'string' }    // Keccak256 hash or raw content string
+    { name: 'data', type: 'string' }    // Telemetry content JSON
   ]
 };
 ```
-
----
-
-## ⚙️ 3. Topic Structure & Namespace
-
-To ensure clean routing and prevent namespace collision, all telemetry and command topics are organized under the `arra/v1` prefix:
-
-| Topic Pattern | Description | Direction |
-| --- | --- | --- |
-| `arra/v1/telemetry/<eth_address>/<sensor_type>` | Device publishes signed telemetry packets. | Outbound (Device $\to$ Broker) |
-| `arra/v1/command/<eth_address>/<action>` | Controllers publish signed command packets to devices. | Inbound (Broker $\to$ Device) |
 
 ---
 
@@ -67,9 +68,9 @@ To ensure clean routing and prevent namespace collision, all telemetry and comma
 
 We have scaffolded three core scripts under `submissions/mac1/`:
 1. **`publisher.ts`**: Simulates an IoT device. Signs a telemetry object using EIP-712, attaches the signature to the envelope, and publishes to the broker.
-2. **`verifier.ts`**: Implements the signature verification logic using `viem` and performs the timestamp freshness checks.
+2. **`verifier.ts`**: Implements EIP-712 recovery, timestamp drift checks (MAX drift: 10s), topic-binding comparison, and persistent sequence checking.
 3. **`subscriber.ts`**: Subscribes to the broker, receives incoming messages, and invokes the verifier to validate payloads end-to-end.
 
 ---
 
-🤖 mac1 จาก maclab [Context: ~15%]
+🤖 mac1 จาก maclab [Context: ~18%]

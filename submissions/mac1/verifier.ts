@@ -1,4 +1,6 @@
 import { recoverTypedDataAddress } from 'viem';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Configuration
 export const DOMAIN_NAME = 'ARRA-MQTT';
@@ -31,13 +33,53 @@ export interface TelemetryEnvelope {
   signature: `0x${string}`;
 }
 
+const SEQ_STORE_FILE = path.join(__dirname, 'seq_store.json');
+
 /**
- * Verifies the EIP-712 signature of a telemetry message and checks for freshness.
+ * Helper to read sequence history from persistent JSON file
  */
-export async function verifyTelemetryMessage(envelope: TelemetryEnvelope): Promise<boolean> {
+function getSequences(): Record<string, number> {
+  try {
+    if (fs.existsSync(SEQ_STORE_FILE)) {
+      const data = fs.readFileSync(SEQ_STORE_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('[Verifier] Error reading seq_store.json:', err);
+  }
+  return {};
+}
+
+/**
+ * Helper to update sequence history in persistent JSON file
+ */
+function saveSequence(address: string, seq: number) {
+  try {
+    const sequences = getSequences();
+    sequences[address.toLowerCase()] = seq;
+    fs.writeFileSync(SEQ_STORE_FILE, JSON.stringify(sequences, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[Verifier] Error writing to seq_store.json:', err);
+  }
+}
+
+/**
+ * Verifies the EIP-712 signature of a telemetry message, checks for freshness, 
+ * binds the topic to prevent broker-rerouting, and checks persistent sequence numbers.
+ */
+export async function verifyTelemetryMessage(
+  envelope: TelemetryEnvelope, 
+  actualDeliveryTopic: string
+): Promise<boolean> {
   const { from, topic, ts, seq, data, signature } = envelope;
 
-  // 1. Verify Timestamp Freshness (Anti-Replay Attack)
+  // 1. Verify Topic Binding (Anti-Broker-Rerouting)
+  if (topic !== actualDeliveryTopic) {
+    console.warn(`[Verifier] Message rejected: Topic mismatch. Signed: "${topic}", Delivered: "${actualDeliveryTopic}"`);
+    return false;
+  }
+
+  // 2. Verify Timestamp Freshness (Anti-Replay Attack)
   const currentTimestamp = Math.floor(Date.now() / 1000);
   const timeDrift = Math.abs(currentTimestamp - ts);
 
@@ -46,7 +88,16 @@ export async function verifyTelemetryMessage(envelope: TelemetryEnvelope): Promi
     return false;
   }
 
-  // 2. Recover Signer Address from EIP-712 Typed Data
+  // 3. Verify Persistent Sequence (Anti-Replay for Control/Commands)
+  const sequences = getSequences();
+  const lastSeq = sequences[from.toLowerCase()] || 0;
+
+  if (seq <= lastSeq) {
+    console.warn(`[Verifier] Message rejected: Replayed sequence. Received: ${seq}, Last seen: ${lastSeq}`);
+    return false;
+  }
+
+  // 4. Recover Signer Address from EIP-712 Typed Data
   try {
     const recoveredAddress = await recoverTypedDataAddress({
       domain: eip712Domain,
@@ -62,12 +113,16 @@ export async function verifyTelemetryMessage(envelope: TelemetryEnvelope): Promi
       signature,
     });
 
-    // 3. Match Recovered Signer to Declared Sender Address
+    // 5. Match Recovered Signer to Declared Sender Address
     const isValid = recoveredAddress.toLowerCase() === from.toLowerCase();
     if (!isValid) {
       console.warn(`[Verifier] Message rejected: Signature mismatch. Declared: ${from}, Recovered: ${recoveredAddress}`);
+      return false;
     }
-    return isValid;
+
+    // 6. Save valid sequence to persistent store
+    saveSequence(from, seq);
+    return true;
   } catch (error) {
     console.error('[Verifier] Failed to recover signature address:', error);
     return false;
