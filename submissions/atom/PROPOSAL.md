@@ -238,3 +238,22 @@ examples/nanomq-bridge.conf
 ```
 
 The examples intentionally keep trust in the payload verifier. Broker config only handles transport and coarse access.
+
+## Review patch: EIP-712, topic binding, persisted sequence
+
+After peer review, the examples were tightened to cover the three common cohort gaps:
+
+```text
+EIP-712จริง:
+  examples/typed-data.ts defines domain ARRA-MQTT + chainId 20260619
+  publisher.ts uses signTypedData
+  subscriber.ts uses verifyTypedData
+
+topic binding:
+  signed message includes topic
+  subscriber rejects if signed topic != delivery topic
+
+persisted seq:
+  subscriber stores last seq in last-seq.json for the PoC
+  production upgrade path = SQLite / Durable Object / broker-side store
+```
