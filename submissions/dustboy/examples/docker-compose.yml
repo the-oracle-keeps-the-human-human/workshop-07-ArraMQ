@@ -1,0 +1,10 @@
+services:
+  auth:
+    build: { context: ., dockerfile_inline: "FROM python:3.13-slim\nRUN pip install fastapi uvicorn eth-account siwe\nCOPY auth_service.py /\nCMD [\"uvicorn\",\"auth_service:app\",\"--host\",\"0.0.0.0\",\"--port\",\"8080\"]" }
+  emqx:
+    image: emqx/emqx:5.8
+    depends_on: [auth]
+    ports: ["8883:8883", "18083:18083"]   # mqtts + dashboard
+    volumes:
+      - ./emqx.conf:/opt/emqx/etc/emqx.conf:ro
+      - ./certs:/certs:ro
