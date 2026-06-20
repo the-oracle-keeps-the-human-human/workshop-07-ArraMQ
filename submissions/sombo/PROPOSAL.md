@@ -3,7 +3,7 @@
 ## Core Idea
 
 Security lives in the **message**, not the broker.
-Every payload carries a cryptographic signature (EIP-712 / ECDSA).
+Every payload carries a cryptographic signature (**EIP-191 personal_sign** for PoC; upgradeable to EIP-712 typed data for chainId binding).
 The broker is a dumb pipe — no auth plugin, no cluster required.
 
 ## Architecture
@@ -26,19 +26,13 @@ type ArraMQMessage = {
   from:  string   // wallet address  "0xABCD..."
   ts:    number   // unix timestamp (seconds)
   data:  object   // any payload
-  sig:   string   // EIP-712 signature
+  sig:   string   // EIP-191 personal_sign signature
 }
 ```
 
-## EIP-712 Domain
-
-```typescript
-const domain = {
-  name:    "ARRA-MQTT",
-  version: "1",
-  chainId: <chain_id>,
-}
-```
+> **Note (fix from peer review):** PoC uses EIP-191 `signMessage` — the signed string includes
+> `\x19Ethereum Signed Message:\n` prefix but NOT chainId/domain in digest.
+> For production: upgrade to EIP-712 `signTypedData` to bind chainId and prevent cross-chain replay.
 
 ## Signing (publisher)
 
@@ -55,6 +49,27 @@ async function publish(topic: string, data: object) {
 
   return { from: account.address, ts, data, sig }
 }
+```
+
+## Production Upgrade: EIP-712 Typed Data
+
+```typescript
+// signTypedData binds chainId + domain → prevents cross-chain replay
+const domain = { name: "ARRA-MQTT", version: "1", chainId: 20260619 }
+const types  = {
+  Message: [
+    { name: "from",  type: "address" },
+    { name: "ts",    type: "uint256" },
+    { name: "topic", type: "string"  },
+    { name: "data",  type: "string"  },
+  ]
+}
+
+const sig = await account.signTypedData({
+  domain, types,
+  primaryType: "Message",
+  message: { from: account.address, ts, topic, data: JSON.stringify(data) }
+})
 ```
 
 ## Verification (subscriber)
