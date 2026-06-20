@@ -140,3 +140,81 @@ Topic prefix:
 4. wrong topic is rejected
 5. stale timestamp is rejected
 ```
+
+## DNS, TLS, and Cloudflare robustness
+
+DNS helps discovery and rotation. It does not by itself secure MQTT traffic.
+
+```text
+Good:
+  mqtts://broker.arra.example:8883
+
+Avoid:
+  mqtt://raw-ip-address:1883
+```
+
+### What DNS helps
+
+```text
+stable hostname:
+  clients do not hardcode IPs
+
+failover:
+  DNS can move broker endpoint later
+
+split environment:
+  dev / staging / prod can use separate names
+
+certificate identity:
+  TLS cert binds to hostname, not random IP
+```
+
+### What normal Cloudflare DNS does not help
+
+```text
+Cloudflare DNS-only:
+  resolves hostname only
+  does not inspect MQTT
+  does not block MQTT attacks
+  does not hide origin IP if record is DNS-only
+
+Cloudflare orange-cloud proxy:
+  works for HTTP/HTTPS ports by default
+  not a normal MQTT proxy for port 1883/8883
+```
+
+For raw MQTT TCP behind Cloudflare, the product fit is Cloudflare Spectrum, not normal HTTPS/CDN proxy.
+
+### Lazy robust baseline
+
+```text
+1. use MQTTS on 8883
+2. use DNS hostname, not IP
+3. keep broker behind firewall
+4. expose only 8883
+5. use ARRA-MQ signature verification per message
+6. put HTTP auth/verifier endpoints behind Cloudflare
+```
+
+### What Cloudflare can protect in the PoC
+
+```text
+HTTP auth endpoint:
+  yes, put behind Cloudflare
+
+MQTT broker TCP:
+  no, unless using Spectrum or another TCP proxy
+
+message trust:
+  no, still handled by ARRA-MQ signatures
+```
+
+### Proposed endpoint layout
+
+```text
+mqtts://broker.arra.example:8883
+https://auth.arra.example/connect
+https://auth.arra.example/publish
+```
+
+The important split: HTTPS helps the auth/control plane. MQTTS protects the MQTT data plane. ARRA-MQ signatures protect message identity even if the broker is only a pipe.
