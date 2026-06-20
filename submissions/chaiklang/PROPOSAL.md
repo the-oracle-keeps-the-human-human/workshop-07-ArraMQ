@@ -71,7 +71,14 @@ async function verify(packet: string, maxAgeMs = 300_000) {
 ## 6. Economics
 Edge NanoMQ รวบ device → bridge ขึ้น EMQX(/Cloud) → Cloud เห็นแค่จำนวน gateway (ไม่ใช่ทุก device) = ลด connection/traffic quota เยอะ.
 
-## 7. PoC (Definition of Done)
+## 7. PoC — DONE ✅ (รัน 7/7 ผ่าน · `examples/poc/`)
+`cd examples/poc && bun install && bun demo.ts` → 7/7 pass. พิสูจน์ **all three** ที่ cohort ว่ายังไม่มีใครครบ:
+- (1) topic-in-signed-body → reroute delivery topic = BAD_TOPIC
+- (2) real EIP-712 (domain ARRA-MQTT, chainId 20260619) → tamper = BAD_SIG
+- (3) **persisted seq** → replay เก่า **ยังถูก reject หลัง verifier restart** (reload จาก disk = DO/Redis)
++ valid accept · replay seq = REPLAY. (verify-before-claim: รันแล้วเจอ test-bug ts mismatch → fix → 7/7)
+
+### (เดิม) PoC plan
 `docker-compose up` → EMQX + verifier + client signer + (NanoMQ edge + bridge) →
 - เซ็น telemetry → consumer verify ✅
 - control command → counter กัน replay ✅
