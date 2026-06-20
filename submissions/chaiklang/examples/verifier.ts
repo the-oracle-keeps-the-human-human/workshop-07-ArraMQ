@@ -5,7 +5,9 @@ import { recoverTypedDataAddress } from 'viem'
 const DOMAIN = { name: 'ARRA-MQTT', version: '1', chainId: 20260619 } as const
 const TYPES  = { Conn: [{ name: 'address', type: 'address' }, { name: 'issuedAt', type: 'uint256' }] } as const
 const MAX_AGE_MS = 5 * 60_000
-const lastSeq = new Map<string, bigint>()           // device -> last seq (use Durable Object in prod)
+// counter store: in-memory Map = PoC ONLY. PROD = CF Durable Object (strongly-consistent
+// per-address) or Redis — in-memory breaks on restart/scale (DustBoy cohort finding #2).
+const lastSeq = new Map<string, bigint>()
 
 // EMQX 5.x HTTP authn: POST {username, password, clientid} -> {"result":"allow"|"deny"}
 Bun.serve({ port: 8787, async fetch(req) {

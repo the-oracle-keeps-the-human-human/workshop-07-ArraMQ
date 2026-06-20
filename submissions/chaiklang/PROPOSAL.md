@@ -21,14 +21,14 @@ broker (EMQX HTTP-auth) → verifier: recover address + (now - issued_at) < maxA
 
 ### 3.2 Per-message — EIP-712 signed payload (self-proving)
 ```
-payload = { data, ts, sig }   sig = EIP-712 sign(domain ARRA-MQTT, { data, ts })
-consumer verify → recover address → รู้ผู้ส่ง · replay เก่า = ts บอกว่าเก่า (telemetry ปลอดภัย)
+payload = { data, ts, sig }   sig = EIP-712 sign(domain ARRA-MQTT, { topic, data, ts })
+consumer verify → recover address + เช็ค recovered topic == delivery topic (topic-binding กัน broker-reroute) · replay เก่า = ts บอกว่าเก่า
 ```
 
 ### 3.3 Control command — + monotonic counter (anti-replay)
 ```
 payload = { cmd, seq, sig }
-server: reject ถ้า seq <= last_seq[address]   (เก็บ int เดียวต่อ device)
+server: reject ถ้า seq <= last_seq[address]   (เก็บใน **CF Durable Object / Redis** — persisted, ไม่ใช่ in-memory ที่พังตอน restart/scale)
 → กัน replay คำสั่ง "เปิด/ปิด" โดยไม่ต้อง nonce round-trip / ไม่พึ่ง clock
 ```
 
