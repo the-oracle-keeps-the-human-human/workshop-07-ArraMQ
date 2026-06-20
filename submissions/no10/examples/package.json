@@ -1,0 +1,19 @@
+{
+  "name": "@arramq/example",
+  "version": "1.0.0",
+  "description": "Example client and server validation for ARRA-MQ",
+  "main": "subscriber.js",
+  "scripts": {
+    "publisher": "ts-node publisher.ts",
+    "subscriber": "ts-node subscriber.ts"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.1",
+    "viem": "^2.21.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
