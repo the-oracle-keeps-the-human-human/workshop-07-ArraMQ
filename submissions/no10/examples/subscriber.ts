@@ -12,23 +12,56 @@ interface ArraMQMessage {
 const MQTT_URL = process.env.MQTT_URL || 'mqtt://localhost:1883';
 const client = mqtt.connect(MQTT_URL);
 
+// In-memory seen signatures cache to prevent duplicate verbatim replay within the skew window
+const seenSignatures = new Map<string, number>(); // sig -> timestamp (seconds)
+
+// Periodic cleanup of expired signatures from the cache
+setInterval(() => {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [sig, ts] of seenSignatures.entries()) {
+    if (now - ts > 30) {
+      seenSignatures.delete(sig);
+    }
+  }
+}, 10000);
+
+// Simple Authorization Allowlist (ACL mapping topic to authorized Ethereum addresses)
+const authorizedPublishers: Record<string, string[]> = {
+  'sensor/no10/temperature': [
+    '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266', // Hardhat Account #0 (matching private key used in publisher.ts)
+  ].map(addr => addr.toLowerCase())
+};
+
 async function verifyMessagePayload(topic: string, message: ArraMQMessage): Promise<boolean> {
   const currentTs = Math.floor(Date.now() / 1000);
   
-  // 1. Freshness check: reject if message was signed more than 30 seconds ago/skew is too large
-  const skew = Math.abs(currentTs - message.ts);
-  if (skew > 30) {
-    console.error(`[Verifier] Rejected: Message expired. Skew: ${skew}s`);
+  // 1. Strict Freshness check: reject stale messages AND future timestamps (pre-signing)
+  const skew = currentTs - message.ts;
+  if (skew < 0 || skew > 30) {
+    console.error(`[Verifier] Rejected: Invalid timestamp skew (skew: ${skew}s). Must be between 0s and 30s.`);
     return false;
   }
 
-  // 2. Topic binding check: ensure topic in signed payload matches the actual topic
+  // 2. Signature seen-cache check: prevent duplicate replay of the exact same message inside the window
+  if (seenSignatures.has(message.sig)) {
+    console.error(`[Verifier] Rejected: Replay attack detected. Signature already processed.`);
+    return false;
+  }
+
+  // 3. Topic binding check: ensure topic in signed payload matches the actual target topic
   if (topic !== message.topic) {
     console.error(`[Verifier] Rejected: Topic mismatch. Subscribed topic: ${topic}, Signed: ${message.topic}`);
     return false;
   }
 
-  // 3. EIP-191 Signature check
+  // 4. Authorization check: ensure publisher is allowed to write to this topic
+  const allowedAddrs = authorizedPublishers[topic];
+  if (!allowedAddrs || !allowedAddrs.includes(message.from.toLowerCase())) {
+    console.error(`[Verifier] Rejected: Publisher ${message.from} is not authorized for topic ${topic}`);
+    return false;
+  }
+
+  // 5. EIP-191 Cryptographic Signature verification
   const signText = `ARRA-MQTT/v1\nAddress: ${message.from}\nTimestamp: ${message.ts}\nTopic: ${message.topic}\nPayload: ${JSON.stringify(message.data)}`;
   
   try {
@@ -37,7 +70,13 @@ async function verifyMessagePayload(topic: string, message: ArraMQMessage): Prom
       message: signText,
       signature: message.sig,
     });
-    return isValid;
+
+    if (isValid) {
+      // Record signature in cache to prevent replay
+      seenSignatures.set(message.sig, message.ts);
+      return true;
+    }
+    return false;
   } catch (error) {
     console.error('[Verifier] Cryptographic verification failed:', error);
     return false;

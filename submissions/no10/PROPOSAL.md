@@ -82,10 +82,10 @@ By explicitly signing the target `topic`, we block "topic-spoofing" attacks wher
 
 | Threat Vector | Attack Scenario | ARRA-MQ Mitigation |
 | :--- | :--- | :--- |
-| **Broker Compromise** | Attacker gains control of the central EMQX instance or an edge broker and attempts to inject fake telemetry. | **Mitigated**: The verifier rejects any payload lacking a valid signature from an authorized publisher address. |
-| **Topic Spoofing / Relaying** | Attacker intercepts a valid message on `topic A` and replays it on `topic B`. | **Mitigated**: The target `topic` is included in the signed string payload. Verifier rejects if `topic` in signed string !== actual topic. |
-| **Replay Attacks** | Attacker intercepts a valid message (e.g., "turn on heater") and re-publishes it 5 hours later. | **Mitigated**: Verifiers implement strict stateless time-as-nonce validation with a **±30-second TTL window**. |
-| **Pre-Signing Attacks** | Attacker gains temporary physical access to a device, generates 10,000 signed payloads with future timestamps, and schedules them for later execution. | **Mitigated**: For critical control topics, the signed string requires a rotating **Server Epoch Nonce** (rotating every 10 min, fetched via a secure endpoint or periodic broadcast). |
+| **Broker Compromise** | Attacker gains control of the central EMQX instance or an edge broker and attempts to inject fake telemetry. | **Mitigated**: The verifier validates the signature AND checks the publisher address against an explicit **Authorization Allowlist** (ACL) for the given topic. |
+| **Topic Spoofing / Relaying** | Attacker intercepts a valid message on `topic A` and replays it on `topic B`. | **Mitigated**: The target `topic` is included in the signed string payload. Verifier rejects if `topic` in signed payload !== actual MQTT topic. |
+| **Replay Attacks** | Attacker intercepts a valid message (e.g., "turn on heater") and re-publishes it. | **Mitigated**: Verifiers implement **Strict Skew Filtering** (skew between 0s and 30s, rejecting future timestamps) + a **Signature Seen-Cache** (deduplicating exact matches in the window). |
+| **Pre-Signing Attacks** | Attacker gains temporary physical access to a device, generates 10,000 signed payloads with future timestamps, and schedules them for later execution. | **Mitigated**: Rejecting future timestamps (negative skew) prevents simple pre-signing. For critical control topics, the signed string requires a rotating **Server Epoch Nonce** (rotating every 10 min, fetched via a secure endpoint or periodic broadcast). |
 
 ---
 
@@ -152,22 +152,56 @@ interface ArraMQMessage {
   sig: `0x${string}`;
 }
 
+// In-memory seen signatures cache to prevent duplicate verbatim replay within the skew window
+const seenSignatures = new Map<string, number>(); // sig -> timestamp
+
+// Periodic cleanup of expired signatures from the cache
+setInterval(() => {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [sig, ts] of seenSignatures.entries()) {
+    if (now - ts > 30) {
+      seenSignatures.delete(sig);
+    }
+  }
+}, 10000);
+
+// Simple Authorization Allowlist (ACL mapping topic to authorized Ethereum addresses)
+const authorizedPublishers: Record<string, string[]> = {
+  'sensor/no10/temperature': [
+    '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266', // Hardhat Account #0 (matching private key used in publisher.ts)
+  ].map(addr => addr.toLowerCase())
+};
+
 async function verifyMessagePayload(topic: string, message: ArraMQMessage): Promise<boolean> {
   const currentTs = Math.floor(Date.now() / 1000);
   
-  // 1. Stateless Time-as-Nonce freshness check (strict 30-second validation window)
-  if (Math.abs(currentTs - message.ts) > 30) {
-    console.error(`Rejected message: Expired or timestamp skew too high (skew: ${currentTs - message.ts}s)`);
+  // 1. Strict Freshness check: reject stale messages AND future timestamps (pre-signing)
+  const skew = currentTs - message.ts;
+  if (skew < 0 || skew > 30) {
+    console.error(`[Verifier] Rejected: Invalid timestamp skew (skew: ${skew}s). Must be between 0s and 30s.`);
     return false;
   }
 
-  // 2. Topic validation (prevent cross-topic replay attacks)
+  // 2. Signature seen-cache check: prevent duplicate replay of the exact same message inside the window
+  if (seenSignatures.has(message.sig)) {
+    console.error(`[Verifier] Rejected: Replay attack detected. Signature already processed.`);
+    return false;
+  }
+
+  // 3. Topic binding check: ensure topic in signed payload matches the actual target topic
   if (topic !== message.topic) {
-    console.error(`Rejected message: Topic mismatch. Actual: ${topic}, Signed: ${message.topic}`);
+    console.error(`[Verifier] Rejected: Topic mismatch. Subscribed topic: ${topic}, Signed: ${message.topic}`);
     return false;
   }
 
-  // 3. Signature verification
+  // 4. Authorization check: ensure publisher is allowed to write to this topic
+  const allowedAddrs = authorizedPublishers[topic];
+  if (!allowedAddrs || !allowedAddrs.includes(message.from.toLowerCase())) {
+    console.error(`[Verifier] Rejected: Publisher ${message.from} is not authorized for topic ${topic}`);
+    return false;
+  }
+
+  // 5. EIP-191 Cryptographic Signature verification
   const signText = `ARRA-MQTT/v1\nAddress: ${message.from}\nTimestamp: ${message.ts}\nTopic: ${message.topic}\nPayload: ${JSON.stringify(message.data)}`;
   
   try {
@@ -176,9 +210,15 @@ async function verifyMessagePayload(topic: string, message: ArraMQMessage): Prom
       message: signText,
       signature: message.sig,
     });
-    return isValid;
+
+    if (isValid) {
+      // Record signature in cache to prevent replay
+      seenSignatures.set(message.sig, message.ts);
+      return true;
+    }
+    return false;
   } catch (error) {
-    console.error('Signature verification failed:', error);
+    console.error('[Verifier] Cryptographic verification failed:', error);
     return false;
   }
 }
