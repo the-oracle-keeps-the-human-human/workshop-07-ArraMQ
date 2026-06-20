@@ -257,3 +257,22 @@ persisted seq:
   subscriber stores last seq in last-seq.json for the PoC
   production upgrade path = SQLite / Durable Object / broker-side store
 ```
+
+## Self-test
+
+Run the minimum security checks:
+
+```bash
+cd submissions/atom/examples
+bun install
+bun run self-test
+```
+
+Checks covered:
+
+```text
+VALID_MESSAGE
+BAD_DELIVERY_TOPIC
+CHAIN_MISMATCH
+RESTART_REPLAY
+```
