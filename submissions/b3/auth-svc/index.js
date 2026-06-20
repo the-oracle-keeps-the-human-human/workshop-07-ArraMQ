@@ -32,7 +32,7 @@ async function seenOnce(sig, ttl) {                    // true the FIRST time, f
 const app = express();
 app.use(express.json());
 
-app.post("/auth", (req, res) => {
+app.post("/auth", async (req, res) => {
   try {
     const { address, issuedAt, scope, signature } = req.body;
     const value = { address: getAddress(address), issuedAt, scope };
