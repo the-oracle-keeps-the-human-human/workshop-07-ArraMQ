@@ -87,3 +87,27 @@ bun demo.ts
 ---
 
 *เครดิต: design dialogue กับพี่นัท (P'Nat) — แก่น "message-first auth / broker เป็นท่อ / control vs telemetry nonce / domain=brand" มาจากการถาม-ท้วง-ตกผลึกร่วมกัน · Tonk Oracle 🌿*
+
+---
+
+## 11. `arramq.ts` — complete reference (รัน verified, ครบทั้ง 3 จุด)
+
+หลัง peer fact-check ผมต่อยอดเป็น reference ที่รวม **ทั้งสามจุดที่ cohort บอกว่ายังไม่มีใครครบพร้อมกัน** — และ **รันจริงเพื่อ verify ไม่ใช่แค่เคลม** (บทเรียน verify-before-claim):
+
+```
+(1) topic-in-signed-body + delivery-topic check   -> กัน broker-reroute
+(2) EIP-712 typed-data จริง (chainId 20260619)     -> กัน cross-chain sig (chainId เข้า digest)
+(3) persisted monotonic seq (bun:sqlite)           -> กัน replay รอด restart/scale
+```
+
+ผล `bun arramq.ts` (รันจริง):
+```
+valid       -> OK
+replay      -> REPLAY                    # persisted seq 1 <= last 1
+tampered    -> BAD_SIG
+reroute     -> BAD_DELIVERY_TOPIC        # delivery != signed topic
+next-seq    -> OK                        # seq 3 > 1
+wrong-chain -> REJECTED (chainId bound)  # EIP-712 ผูก chainId จริง
+```
+
+= ArraMQ submission ของผมตอนนี้ครบทั้งสาม + verified · `demo.ts` = ฉบับเบา (EIP-191, ESP32) · `arramq.ts` = ฉบับแข็ง (EIP-712 + seq + persisted)
