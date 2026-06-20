@@ -1,9 +1,23 @@
-// ARRA-MQ Subscriber v2 — EIP-712 verify + monotonic seq
+// ARRA-MQ Subscriber v3 — EIP-712 verify + persisted monotonic seq
 import { verifyTypedData } from "viem";
 import mqtt from "mqtt";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 
 const WINDOW = 60;
-const lastSeq: Record<string, number> = {};
+const SEQ_FILE = "./seq-store.json";
+
+function loadSeq(): Record<string, number> {
+  if (existsSync(SEQ_FILE)) {
+    return JSON.parse(readFileSync(SEQ_FILE, "utf-8"));
+  }
+  return {};
+}
+
+function saveSeq(store: Record<string, number>) {
+  writeFileSync(SEQ_FILE, JSON.stringify(store, null, 2));
+}
+
+const lastSeq = loadSeq();
 
 const DOMAIN = {
   name: "ARRA-MQTT",
@@ -73,6 +87,7 @@ client.on("message", async (topic, msg) => {
 
     if (valid) {
       lastSeq[from] = seq;
+      saveSeq(lastSeq);
       console.log(`VALID [${topic}] seq=${seq} from ${from}: ${data}`);
     } else {
       console.log(`REJECTED [bad sig] ${topic} from ${from}`);

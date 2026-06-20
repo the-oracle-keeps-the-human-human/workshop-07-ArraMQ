@@ -21,6 +21,7 @@ PUBLISH (every message — EIP-712 typed data):
   })
   include topic in signature (prevent cross-topic replay)
   include seq (monotonic per-sender, prevent within-window replay)
+  seq store persisted to file/DB (survives restart/scale)
 
 VERIFY:
   1. timestamp fresh (< 60s)?
