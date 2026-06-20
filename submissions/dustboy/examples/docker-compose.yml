@@ -1,10 +1,19 @@
 services:
-  auth:
-    build: { context: ., dockerfile_inline: "FROM python:3.13-slim\nRUN pip install fastapi uvicorn eth-account siwe\nCOPY auth_service.py /\nCMD [\"uvicorn\",\"auth_service:app\",\"--host\",\"0.0.0.0\",\"--port\",\"8080\"]" }
+  redis:                                   # persisted monotonic-seq store for verifier.py
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  auth:                                    # Layer 1 connect gate (EIP-712 Connect)
+    image: python:3.13-slim
+    working_dir: /app
+    volumes: ["./auth_service.py:/app/auth_service.py:ro"]
+    command: ["sh","-c","pip install -q fastapi uvicorn eth-account && uvicorn auth_service:app --host 0.0.0.0 --port 8080"]
   emqx:
     image: emqx/emqx:5.8
     depends_on: [auth]
-    ports: ["8883:8883", "18083:18083"]   # mqtts + dashboard
+    ports: ["8883:8883", "18083:18083"]    # mqtts + dashboard
     volumes:
       - ./emqx.conf:/opt/emqx/etc/emqx.conf:ro
       - ./certs:/certs:ro
+  # Layer 2 (verifier.py) runs where subscribers are, or as a verifying bridge.
+  # It needs REDIS_URL=redis://redis:6379/0. Self-test: `docker compose up -d redis`
+  # then `REDIS_URL=redis://localhost:6379/0 python verifier.py`.
