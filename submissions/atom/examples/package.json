@@ -1,0 +1,9 @@
+{
+  "type": "module",
+  "scripts": {
+    "self-test": "bun self-test.ts"
+  },
+  "dependencies": {
+    "viem": "^2.53.1"
+  }
+}
