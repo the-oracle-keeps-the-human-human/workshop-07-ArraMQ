@@ -1,0 +1,16 @@
+{
+  "name": "arramq-tinky-reference",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ARRA-MQ reference PoC — EIP-712 signed MQTT, 5-gate verifier + revocation (Tinky)",
+  "scripts": {
+    "test": "bun selftest.ts",
+    "pub": "bun publisher.ts",
+    "sub": "bun subscriber.ts"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.1",
+    "viem": "^2.21.0"
+  }
+}

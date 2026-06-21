@@ -1,0 +1,12 @@
+# ARRA-MQ PoC — Mosquitto vanilla (broker = ท่อเปล่า)
+#   docker compose up -d
+#   bun subscriber.ts   (terminal 1)
+#   bun publisher.ts    (terminal 2)
+services:
+  broker:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    restart: unless-stopped
