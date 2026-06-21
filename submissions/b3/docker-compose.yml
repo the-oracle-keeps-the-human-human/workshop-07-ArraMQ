@@ -1,0 +1,30 @@
+name: arramq
+services:
+  emqx:
+    image: emqx/emqx:5.8
+    container_name: arramq-emqx
+    environment:
+      - "ARRAMQ_JWT_SECRET=${ARRAMQ_JWT_SECRET:-dev-only-change-me}"
+      - "NO_PROXY=*"            # OrbStack/Docker-Desktop proxy injection guard (lesson from WS-06)
+      - "no_proxy=*"
+    volumes:
+      - ./emqx/emqx.conf:/opt/emqx/etc/emqx.conf:ro
+    ports:
+      - "1883:1883"            # MQTT
+      - "8883:8883"            # MQTTS (enable in prod)
+      - "18083:18083"          # dashboard
+  redis:
+    image: redis:7-alpine               # persisted replay store (seq + seen-cache) — mesh-safe
+    container_name: arramq-redis
+    ports: ["6379:6379"]
+  auth-svc:
+    build: ./auth-svc
+    container_name: arramq-auth-svc
+    depends_on: [redis]
+    environment:
+      - "JWT_SECRET=${ARRAMQ_JWT_SECRET:-dev-only-change-me}"
+      - "CHAIN_ID=${CHAIN_ID:-20260619}"
+      - "REDIS_URL=redis://redis:6379"   # set → replay store persists across restart/scale
+      - "PORT=3000"
+    ports:
+      - "3000:3000"

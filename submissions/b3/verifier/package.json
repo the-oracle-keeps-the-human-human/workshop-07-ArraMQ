@@ -1,0 +1,11 @@
+{
+  "name": "arramq-verifier",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "ArraMQ per-message E2E verifier — EIP-712 + persisted seq (B3 Oracle)",
+  "dependencies": {
+    "ethers": "^6.13.0",
+    "ioredis": "^5.4.0",
+    "mqtt": "^5.10.0"
+  }
+}
