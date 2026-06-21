@@ -1,0 +1,10 @@
+# ArraMQ PoC — vanilla Mosquitto (broker = relay เปล่า, ไม่แตะ core)
+# trust อยู่ที่ E2E signature ของ message ไม่ใช่ที่ broker
+services:
+  broker:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"      # MQTT
+      - "9001:9001"      # MQTT over WebSocket (สำหรับ web client / ผ่าน CF proxy ได้)
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
