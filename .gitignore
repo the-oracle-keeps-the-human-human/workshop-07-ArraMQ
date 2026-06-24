@@ -1,0 +1,4 @@
+node_modules/
+seq_store.json
+bun.lock
+.env
